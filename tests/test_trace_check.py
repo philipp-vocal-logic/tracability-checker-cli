@@ -359,21 +359,21 @@ def test_cli_returns_exit_2_on_invalid_config(
             "REQ-1.toml",
             'status = "APPROVED"\n',
             "@trace\ndef test_a(): pass\n",
-            "tests/test_sample.py:1: malformed @trace decorator: expected @trace(...)",
+            "tests/test_sample.py:2: malformed @trace decorator: expected @trace(...)",
             id="bare_trace_decorator",
         ),
         pytest.param(
             "REQ-1.toml",
             'status = "APPROVED"\n',
             "@trace(123)\ndef test_a(): pass\n",
-            "tests/test_sample.py:1: malformed @trace decorator: link must be a non-empty string",
+            "tests/test_sample.py:2: malformed @trace decorator: link must be a non-empty string",
             id="non_string_trace_arg",
         ),
         pytest.param(
             "REQ-1.toml",
             'status = "APPROVED"\n',
             "@trace('REQ-1', unknown='x')\ndef test_a(): pass\n",
-            "tests/test_sample.py:1: malformed @trace decorator: unknown keyword 'unknown'",
+            "tests/test_sample.py:2: malformed @trace decorator: unknown keyword 'unknown'",
             id="unknown_trace_keyword",
         ),
         pytest.param(
@@ -388,21 +388,21 @@ def test_cli_returns_exit_2_on_invalid_config(
             "REQ-1.toml",
             'status = "APPROVED"\n',
             "@trace('REQ-1')\ndef sample_fn(): pass\n",
-            "tests/test_sample.py:1: @trace must decorate a test_* function, got 'sample_fn'",
+            "tests/test_sample.py:2: @trace must decorate a test_* function, got 'sample_fn'",
             id="trace_on_non_test_function",
         ),
         pytest.param(
             "REQ-1.toml",
             'status = "APPROVED"\n',
             "@trace('REQ-1')\nclass SampleSuite: pass\n",
-            "tests/test_sample.py:1: @trace must decorate a test_* function, got 'SampleSuite'",
+            "tests/test_sample.py:2: @trace must decorate a test_* function, got 'SampleSuite'",
             id="trace_on_class",
         ),
         pytest.param(
             "REQ-1.toml",
             'status = "APPROVED"\n',
             "@trace('REQ-1')\n@trace('REQ-1')\ndef test_a(): pass\n",
-            "tests/test_sample.py:1: duplicate @trace decorator on 'test_a'",
+            "tests/test_sample.py:2: duplicate @trace decorator on 'test_a'",
             id="duplicate_trace_on_same_function",
         ),
         pytest.param(
@@ -417,7 +417,7 @@ def test_cli_returns_exit_2_on_invalid_config(
             'links = ["US-1"]\n',
             "@trace\ndef test_a(): pass\n",
             "reqs/REQ-1.toml: missing or invalid 'status'; "
-            "tests/test_sample.py:1: malformed @trace decorator",
+            "tests/test_sample.py:2: malformed @trace decorator",
             id="multiple_discovery_errors_collected",
         ),
         pytest.param(
@@ -454,7 +454,8 @@ def test_cli_returns_exit_2_on_node_discovery_error(
     (tmp_path / "reqs").mkdir()
     (tmp_path / "tests").mkdir()
     (tmp_path / "reqs" / req_filename).write_text(req_content, encoding="utf-8")
-    (tmp_path / "tests" / "test_sample.py").write_text(test_content, encoding="utf-8")
+    test_source = f"from trace_check import trace\n{test_content}"
+    (tmp_path / "tests" / "test_sample.py").write_text(test_source, encoding="utf-8")
     cfg = tmp_path / "traceability.toml"
     cfg.write_text(
         '[schema]\nchain = ["Requirement", "TestCase"]\n'

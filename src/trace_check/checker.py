@@ -1,79 +1,28 @@
-"""Core data structures, AST-based @trace discovery, and validation rules."""
+"""Configuration loading, node discovery, and traceability validation rules."""
 
 from __future__ import annotations
 
-import ast
-import re
 import tomllib
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-DEFAULT_ACTIVE_STATUS = "APPROVED"
-DEFAULT_DEPRECATED_STATUS = "DEPRECATED"
-NODE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+from trace_check.model import (
+    DEFAULT_ACTIVE_STATUS,
+    DEFAULT_DEPRECATED_STATUS,
+    Config,
+    Node,
+    Rule,
+    Violation,
+    dedup_links,
+    validate_node_id,
+)
+from trace_check.source import load_source_nodes
+
 ALLOWED_CONFIG_KEYS = frozenset({"schema", "statuses", "locations", "rules"})
 ALLOWED_SCHEMA_KEYS = frozenset({"chain", "deprecated_status"})
 ALLOWED_RULE_KEYS = frozenset({"id", "source_type", "when_status", "target_type", "target_status"})
 ALLOWED_NODE_KEYS = frozenset({"id", "type", "status", "title", "description", "links"})
-
-DecoratedStmt = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
-
-
-@dataclass(frozen=True)
-class Node:
-    """A single traceability node in the project graph."""
-
-    id: str
-    type: str
-    status: str
-    links: tuple[str, ...] = ()
-    location: str = ""
-
-
-@dataclass(frozen=True)
-class Rule:
-    """A declarative status and link coverage constraint."""
-
-    id: str
-    source_type: str
-    when_status: str
-    target_type: str
-    target_status: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class Violation:
-    """A single traceability check violation."""
-
-    code: str
-    message: str
-    node_id: str
-    location: str = ""
-    rule_id: str | None = None
-
-    def format(self) -> str:
-        """Format violation as a single-line diagnostic string."""
-        prefix = f"{self.location}: {self.node_id}" if self.location else self.node_id
-        rule_suffix = f" ({self.rule_id})" if self.rule_id else ""
-        return f"{prefix} [{self.code}]{rule_suffix}: {self.message}"
-
-    def to_dict(self) -> dict[str, str | None]:
-        """Serialize violation for JSON output."""
-        keys = ("location", "node_id", "code", "rule_id", "message")
-        return {k: getattr(self, k) for k in keys}
-
-
-@dataclass(frozen=True)
-class Config:
-    """Loaded traceability schema, statuses, rules, and discovered nodes."""
-
-    chain: tuple[str, ...]
-    statuses: dict[str, frozenset[str]]
-    rules: tuple[Rule, ...]
-    nodes: dict[str, Node]
-    deprecated_status: str = DEFAULT_DEPRECATED_STATUS
 
 
 def trace(
@@ -204,21 +153,6 @@ def _parse_rules(
     return tuple(rules)
 
 
-def _validate_node_id(node_id: str, scope: str) -> str:
-    if not NODE_ID_RE.match(node_id):
-        raise ValueError(f"{scope}: invalid node id '{node_id}'")
-    return node_id
-
-
-def _dedup_links(links: tuple[str, ...], scope: str) -> tuple[str, ...]:
-    cleaned = tuple(link.strip() for link in links)
-    if any(not link for link in cleaned):
-        raise ValueError(f"{scope}: empty link target in {list(links)}")
-    if len(set(cleaned)) != len(cleaned):
-        raise ValueError(f"{scope}: duplicate link targets in {list(cleaned)}")
-    return cleaned
-
-
 def _load_toml_node(path: Path, expected_type: str, rel_path: str) -> Node:
     try:
         with path.open("rb") as f:
@@ -229,85 +163,15 @@ def _load_toml_node(path: Path, expected_type: str, rel_path: str) -> Node:
     raw_id = _require_str(raw, "id", rel_path) if "id" in raw else path.stem
     if raw_id != path.stem:
         raise ValueError(f"{rel_path}: id '{raw_id}' does not match filename '{path.stem}'")
-    node_id = _validate_node_id(raw_id, rel_path)
+    node_id = validate_node_id(raw_id, rel_path)
     node_type = _require_str(raw, "type", rel_path) if "type" in raw else expected_type
     if node_type != expected_type:
         msg = f"{rel_path}: type '{node_type}' does not match location type '{expected_type}'"
         raise ValueError(msg)
     status = _require_str(raw, "status", rel_path)
     links_scope = f"{rel_path}: links"
-    links = _dedup_links(_as_str_tuple(raw.get("links", ()), links_scope), links_scope)
+    links = dedup_links(_as_str_tuple(raw.get("links", ()), links_scope), links_scope)
     return Node(node_id, node_type, status, links, rel_path)
-
-
-def _is_trace_decorator(expr: ast.expr) -> bool:
-    target = expr.func if isinstance(expr, ast.Call) else expr
-    return (isinstance(target, ast.Name) and target.id == "trace") or (
-        isinstance(target, ast.Attribute) and target.attr == "trace"
-    )
-
-
-def _parse_str_constant(expr: ast.expr, scope: str, label: str) -> str:
-    if isinstance(expr, ast.Constant) and isinstance(expr.value, str) and expr.value.strip():
-        return expr.value.strip()
-    raise ValueError(f"{scope}: malformed @trace decorator: {label} must be a non-empty string")
-
-
-def _parse_trace_kw_value(kw: ast.keyword, scope: str) -> Any:
-    if kw.arg == "links":
-        if not isinstance(kw.value, (ast.List, ast.Tuple)):
-            raise ValueError(f"{scope}: malformed @trace decorator: 'links' must be a list")
-        return tuple(_parse_str_constant(elt, scope, "link") for elt in kw.value.elts)
-    if kw.arg in {"id", "status"}:
-        return _parse_str_constant(kw.value, scope, f"'{kw.arg}'")
-    raise ValueError(f"{scope}: malformed @trace decorator: unknown keyword '{kw.arg}'")
-
-
-def _parse_trace_call(call: ast.expr, func_name: str, node_type: str, rel_path: str) -> Node:
-    scope = f"{rel_path}:{call.lineno}"
-    if not isinstance(call, ast.Call):
-        raise ValueError(f"{scope}: malformed @trace decorator: expected @trace(...)")
-    arg_links = tuple(_parse_str_constant(arg, scope, "link") for arg in call.args)
-    kw_map = {kw.arg: _parse_trace_kw_value(kw, scope) for kw in call.keywords}
-    if arg_links and "links" in kw_map:
-        raise ValueError(f"{scope}: malformed @trace decorator: duplicate links specification")
-    raw_links = arg_links or kw_map.get("links", ())
-    node_id = _validate_node_id(kw_map.get("id", func_name), scope)
-    status = kw_map.get("status", DEFAULT_ACTIVE_STATUS)
-    return Node(node_id, node_type, status, _dedup_links(raw_links, scope), scope)
-
-
-def _check_decorated_stmt(stmt: DecoratedStmt, node_type: str, rel_path: str) -> Node | None:
-    trace_decs = list(filter(_is_trace_decorator, stmt.decorator_list))
-    if not trace_decs:
-        return None
-    scope = f"{rel_path}:{trace_decs[0].lineno}"
-    if isinstance(stmt, ast.ClassDef) or not stmt.name.startswith("test_"):
-        raise ValueError(f"{scope}: @trace must decorate a test_* function, got '{stmt.name}'")
-    if len(trace_decs) > 1:
-        raise ValueError(f"{scope}: duplicate @trace decorator on '{stmt.name}'")
-    return _parse_trace_call(trace_decs[0], stmt.name, node_type, rel_path)
-
-
-def _load_source_nodes(path: Path, node_type: str, rel_path: str) -> list[Node]:
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel_path)
-    except (UnicodeDecodeError, SyntaxError) as error:
-        raise ValueError(f"{rel_path}: {error}") from error
-    stmts = sorted(
-        (n for n in ast.walk(tree) if isinstance(n, DecoratedStmt)), key=lambda s: s.lineno
-    )
-    nodes: list[Node] = []
-    errors: list[str] = []
-    for stmt in stmts:
-        try:
-            if (node := _check_decorated_stmt(stmt, node_type, rel_path)) is not None:
-                nodes.append(node)
-        except ValueError as error:
-            errors.append(str(error))
-    if errors:
-        raise ValueError("; ".join(errors))
-    return nodes
 
 
 def _discover_file_nodes(
@@ -318,14 +182,15 @@ def _discover_file_nodes(
         file_nodes = (
             [_load_toml_node(path, node_type, rel_path)]
             if path.suffix == ".toml"
-            else _load_source_nodes(path, node_type, rel_path)
+            else load_source_nodes(path, node_type, rel_path)
         )
     except ValueError as error:
         errors.append(str(error))
         return
     for node in file_nodes:
         if node.id in discovered:
-            errors.append(f"{rel_path}: duplicate node id '{node.id}'")
+            first = discovered[node.id].location
+            errors.append(f"{rel_path}: duplicate node id '{node.id}' (first defined at {first})")
         else:
             discovered[node.id] = node
 

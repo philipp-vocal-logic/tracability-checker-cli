@@ -43,7 +43,7 @@ Each rule requires that every active node of `source_type` with status `when_sta
 ## Node Definitions
 
 - **TOML nodes** (`*.toml`): One node per file (`id` defaults to filename stem, `type` defaults to location type, required `status`, optional `links`, `title`, `description`).
-- **Source nodes** (`@trace` decorator on `def test_*` functions in `.py` files, parsed statically via `ast`; `id` defaults to the test function name and `status` defaults to `"APPROVED"`):
+- **Source nodes** (`@trace` decorator on `def test_*` functions in `.py` files, parsed statically via `ast`; `id` defaults to the pytest-style qualified name such as `tests/test_x.py::TestSuite::test_example`, and `status` defaults to `"APPROVED"`). The decorator is recognized only when it resolves to `trace_check.trace` through the module's imports (`from trace_check import trace [as t]`, `import trace_check [as tc]`, `from trace_check import checker`, ...); other decorators named `trace` are ignored. Pass `id="TC-1"` for a short explicit id (`[A-Za-z0-9_-]+`):
   ```python
   from trace_check import trace
 
