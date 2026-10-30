@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_DEPRECATED_STATUS = "DEPRECATED"
-TRACE_COMMENT_RE = re.compile(r"^\s*(?:#|//)\s*@trace\b")
+NODE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+TRACE_COMMENT_RE = re.compile(r"^\s*#\s*@trace\b")
 TRACE_DIRECTIVE_RE = re.compile(
-    r"^\s*(?:#|//)\s*@trace\s+(?P<id>[A-Za-z0-9_-]+)\s+(?P<status>[A-Za-z0-9_-]+)"
+    r"^\s*#\s*@trace\s+(?P<id>[A-Za-z0-9_-]+)\s+(?P<status>[A-Za-z0-9_-]+)"
     r"(?:\s+\[(?P<links>[^\]]*)\])?\s*$"
 )
 
@@ -26,6 +27,7 @@ class Node:
     type: str
     status: str
     links: tuple[str, ...] = ()
+    location: str = ""
 
 
 @dataclass(frozen=True)
@@ -122,9 +124,9 @@ def _parse_statuses(
 
 def _validate_location_pattern(node_type: str, raw_pattern: Any) -> str:
     if not isinstance(raw_pattern, str) or not raw_pattern.strip():
-        return ""
+        raise ValueError(f"locations.{node_type} must be a non-empty string")
     pattern = raw_pattern.strip()
-    if Path(pattern).is_absolute():
+    if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
         raise ValueError(f"locations.{node_type} must be a relative path pattern: '{pattern}'")
     return pattern
 
@@ -133,11 +135,10 @@ def _parse_locations(chain: tuple[str, ...], raw_locations: dict[str, Any]) -> d
     unknown = sorted(set(raw_locations) - set(chain))
     if unknown:
         raise ValueError(f"locations defined for unknown node types: {unknown}")
-    locations = {t: _validate_location_pattern(t, raw_locations.get(t)) for t in chain}
-    missing = [t for t, pattern in locations.items() if not pattern]
+    missing = [t for t in chain if t not in raw_locations]
     if missing:
         raise ValueError(f"missing locations configuration for node types: {missing}")
-    return locations
+    return {t: _validate_location_pattern(t, raw_locations[t]) for t in chain}
 
 
 def _validate_rule(
@@ -199,7 +200,15 @@ def _parse_rules(
     return tuple(rules)
 
 
-def _load_toml_node(path: Path, expected_type: str) -> Node:
+def _dedup_links(links: tuple[str, ...], scope: str) -> tuple[str, ...]:
+    if any(not NODE_ID_RE.match(link) for link in links):
+        raise ValueError(f"{scope}: invalid link target id in {list(links)}")
+    if len(set(links)) != len(links):
+        raise ValueError(f"{scope}: duplicate link targets in {list(links)}")
+    return links
+
+
+def _load_toml_node(path: Path, expected_type: str, rel_path: str) -> Node:
     try:
         with path.open("rb") as f:
             raw = tomllib.load(f)
@@ -215,51 +224,61 @@ def _load_toml_node(path: Path, expected_type: str) -> Node:
             f"{path}: type '{node_type}' does not match location type '{expected_type}'"
         )
     status = _require_str(raw, "status", str(path))
-    links = _as_str_tuple(raw.get("links", ()), f"{path}: links")
-    return Node(id=node_id, type=node_type, status=status, links=links)
+    links = _dedup_links(_as_str_tuple(raw.get("links", ()), f"{path}: links"), f"{path}: links")
+    return Node(id=node_id, type=node_type, status=status, links=links, location=rel_path)
 
 
-def _parse_trace_links(raw_links: str | None) -> tuple[str, ...]:
-    if not raw_links:
+def _parse_trace_links(raw_links: str | None, scope: str) -> tuple[str, ...]:
+    if not raw_links or not raw_links.strip():
         return ()
-    parts = (part.strip().strip("\"'") for part in raw_links.split(","))
-    return tuple(p for p in parts if p)
+    return _dedup_links(tuple(part.strip() for part in raw_links.split(",")), scope)
 
 
-def _iter_comment_lines(path: Path) -> list[tuple[int, str]]:
+def _tokenize_python(path: Path) -> list[tokenize.TokenInfo]:
     try:
         text = path.read_text(encoding="utf-8")
-        if path.suffix != ".py":
-            return list(enumerate(text.splitlines(), start=1))
-        tokens = tokenize.generate_tokens(io.StringIO(text).readline)
-        return [(tok.start[0], tok.string) for tok in tokens if tok.type == tokenize.COMMENT]
+        return list(tokenize.generate_tokens(io.StringIO(text).readline))
     except (UnicodeDecodeError, tokenize.TokenError, IndentationError, SyntaxError) as error:
         raise ValueError(f"{path}: {error}") from error
 
 
-def _load_source_nodes(path: Path, node_type: str) -> list[Node]:
+def _is_trace_token(tok: tokenize.TokenInfo) -> bool:
+    return tok.type == tokenize.COMMENT and bool(TRACE_COMMENT_RE.match(tok.string))
+
+
+def _parse_trace_directive(path: Path, tok: tokenize.TokenInfo, node_type: str, rel: str) -> Node:
+    lineno, line = tok.start[0], tok.string
+    match = TRACE_DIRECTIVE_RE.match(line)
+    if match is None:
+        raise ValueError(f"{path}:{lineno}: malformed @trace directive: {line.strip()}")
+    links = _parse_trace_links(match.group("links"), f"{path}:{lineno}")
+    return Node(match.group("id"), node_type, match.group("status"), links, f"{rel}:{lineno}")
+
+
+def _load_source_nodes(path: Path, node_type: str, rel_path: str) -> list[Node]:
     nodes: list[Node] = []
-    for lineno, line in _iter_comment_lines(path):
-        if not TRACE_COMMENT_RE.match(line):
-            continue
-        match = TRACE_DIRECTIVE_RE.match(line)
-        if match is None:
-            raise ValueError(f"{path}:{lineno}: malformed @trace directive: {line.strip()}")
-        nodes.append(
-            Node(
-                id=match.group("id"),
-                type=node_type,
-                status=match.group("status"),
-                links=_parse_trace_links(match.group("links")),
-            )
-        )
+    pending_line: int | None = None
+    for tok in _tokenize_python(path):
+        if tok.type == tokenize.NAME and tok.string == "def":
+            pending_line = None
+        elif _is_trace_token(tok):
+            node = _parse_trace_directive(path, tok, node_type, rel_path)
+            if pending_line is not None:
+                raise ValueError(f"{path}:{pending_line}: @trace must precede a function")
+            pending_line = tok.start[0]
+            nodes.append(node)
+    if pending_line is not None:
+        raise ValueError(f"{path}:{pending_line}: @trace must precede a function")
     return nodes
 
 
-def _nodes_from_file(path: Path, node_type: str) -> list[Node]:
+def _nodes_from_file(path: Path, node_type: str, base_dir: Path) -> list[Node]:
+    rel_path = path.relative_to(base_dir).as_posix()
     if path.suffix == ".toml":
-        return [_load_toml_node(path, node_type)]
-    return _load_source_nodes(path, node_type)
+        return [_load_toml_node(path, node_type, rel_path)]
+    if path.suffix == ".py":
+        return _load_source_nodes(path, node_type, rel_path)
+    raise ValueError(f"{path}: unsupported node file extension '{path.suffix}'")
 
 
 def _iter_location_files(base_dir: Path, pattern: str) -> list[Path]:
@@ -273,7 +292,7 @@ def _discover_nodes(base_dir: Path, locations: dict[str, str]) -> dict[str, Node
     discovered: dict[str, Node] = {}
     for node_type, pattern in locations.items():
         for file_path in _iter_location_files(base_dir, pattern):
-            for node in _nodes_from_file(file_path, node_type):
+            for node in _nodes_from_file(file_path, node_type, base_dir):
                 if node.id in discovered:
                     raise ValueError(f"duplicate node id '{node.id}' found in {file_path}")
                 discovered[node.id] = node
@@ -321,31 +340,35 @@ def build_adjacency(
     return adj
 
 
+def _node_prefix(node: Node) -> str:
+    return f"{node.location}: {node.id}" if node.location else node.id
+
+
 def _check_node_schema(node: Node, statuses: dict[str, frozenset[str]]) -> list[str]:
+    prefix = _node_prefix(node)
     allowed = statuses.get(node.type)
     if allowed is None:
-        return [f"{node.id} [ERR_UNKNOWN_TYPE]: unknown type '{node.type}'"]
+        return [f"{prefix} [ERR_UNKNOWN_TYPE]: unknown type '{node.type}'"]
     if node.status not in allowed:
-        return [f"{node.id} [ERR_INVALID_STATUS]: invalid status '{node.status}' for {node.type}"]
+        return [f"{prefix} [ERR_INVALID_STATUS]: invalid status '{node.status}' for {node.type}"]
     return []
 
 
 def _check_declared_links(
     node: Node, nodes: dict[str, Node], edges: set[frozenset[str]], deprecated_status: str
 ) -> list[str]:
-    if node.status == deprecated_status:
-        return []
+    prefix = _node_prefix(node)
     errors: list[str] = []
     for target_id in node.links:
         target = nodes.get(target_id)
         if target is None:
-            errors.append(f"{node.id} [ERR_DANGLING_LINK]: target '{target_id}' does not exist")
+            errors.append(f"{prefix} [ERR_DANGLING_LINK]: target '{target_id}' does not exist")
         elif frozenset((node.type, target.type)) not in edges:
             msg = f"cannot link {node.type} to {target.type} ('{target_id}')"
-            errors.append(f"{node.id} [ERR_INVALID_EDGE]: {msg}")
-        elif target.status == deprecated_status:
+            errors.append(f"{prefix} [ERR_INVALID_EDGE]: {msg}")
+        elif node.status != deprecated_status and target.status == deprecated_status:
             msg = f"active {node.type} links to {deprecated_status} {target.type} '{target_id}'"
-            errors.append(f"{node.id} [ERR_DEPRECATED_LINK]: {msg}")
+            errors.append(f"{prefix} [ERR_DEPRECATED_LINK]: {msg}")
     return errors
 
 
@@ -361,18 +384,17 @@ def _check_rule_for_node(
         rule.when_status,
     ):
         return []
+    prefix = _node_prefix(node)
     targets = [
         nodes[tid]
         for tid in sorted(neighbors)
         if nodes[tid].type == rule.target_type and nodes[tid].status != deprecated_status
     ]
     if not targets:
-        return [
-            f"{node.id} [ERR_MISSING_LINK] ({rule.id}): requires >= 1 active {rule.target_type}"
-        ]
+        return [f"{prefix} [ERR_MISSING_LINK] ({rule.id}): requires >= 1 active {rule.target_type}"]
     expected = list(rule.target_status)
     return [
-        f"{node.id} [ERR_TARGET_STATUS] ({rule.id}): "
+        f"{prefix} [ERR_TARGET_STATUS] ({rule.id}): "
         f"linked {t.type} '{t.id}' is '{t.status}', expected {expected}"
         for t in targets
         if t.status not in rule.target_status

@@ -11,7 +11,7 @@ trace-check [traceability.toml]
 ### Exit Codes
 
 - `0`: All traceability rules and links pass (silent output).
-- `1`: One or more traceability violations found (printed to `stdout`, one per line).
+- `1`: One or more traceability violations found (printed to `stdout` as `<location>: <id> [<ERR_CODE>]: <message>`, one per line).
 - `2`: Configuration or node discovery error (printed to `stderr` with `[ERR_CONFIG]`).
 
 ## Configuration (`traceability.toml`)
@@ -38,12 +38,15 @@ target_type = "TestCase"
 target_status = ["GREEN"]
 ```
 
+Each rule requires that every active node of `source_type` with status `when_status` links to at least one active node of adjacent `target_type`, and that all linked active nodes of `target_type` have a status in `target_status`.
+
 ## Node Definitions
 
 - **TOML nodes** (`*.toml`): One node per file (`id` defaults to filename stem, `type` defaults to location type, required `status`, optional `links`, `title`, `description`).
-- **Source nodes** (comments in source/test files):
+- **Source nodes** (comments in `.py` files, placed before a `def` function definition; `trace-check` validates static traceability while `pytest` verifies test execution):
   ```python
   # @trace TC-EXAMPLE GREEN [REQ-1, REQ-2]
+  def test_example() -> None: ...
   ```
 
 ## Development

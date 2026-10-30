@@ -92,12 +92,22 @@ def test_requirement_specification_testcase_chain_passes() -> None:
             id="dangling_link",
         ),
         pytest.param(
+            {"US-OLD": Node("US-OLD", "Story", "DEPRECATED", links=("MISSING-99",))},
+            "US-OLD [ERR_DANGLING_LINK]: target 'MISSING-99' does not exist",
+            id="deprecated_node_dangling_link",
+        ),
+        pytest.param(
             {
                 "US-1": Node("US-1", "Story", "DRAFT", links=("TC-1",)),
                 "TC-1": Node("TC-1", "TestCase", "DRAFT"),
             },
             "US-1 [ERR_INVALID_EDGE]: cannot link Story to TestCase ('TC-1')",
             id="non_adjacent_edge",
+        ),
+        pytest.param(
+            {"US-1": Node("US-1", "Story", "DRAFT", links=("MISSING",), location="s/US-1.toml")},
+            "s/US-1.toml: US-1 [ERR_DANGLING_LINK]: target 'MISSING' does not exist",
+            id="node_location_prefix",
         ),
     ],
 )
@@ -287,6 +297,20 @@ def test_deprecated_node_is_exempt_from_active_rules_and_link_errors() -> None:
         ),
         pytest.param(
             '[schema]\nchain = ["Requirement", "TestCase"]\n'
+            '[statuses]\nRequirement = ["APPROVED"]\nTestCase = ["GREEN"]\n'
+            '[locations]\nRequirement = "../reqs/*.toml"\nTestCase = "t/*.py"\n',
+            "must be a relative path pattern",
+            id="parent_traversal_location_pattern",
+        ),
+        pytest.param(
+            '[schema]\nchain = ["Requirement", "TestCase"]\n'
+            '[statuses]\nRequirement = ["APPROVED"]\nTestCase = ["GREEN"]\n'
+            '[locations]\nRequirement = ["reqs/*.toml"]\nTestCase = "t/*.py"\n',
+            "locations.Requirement must be a non-empty string",
+            id="non_string_location_pattern",
+        ),
+        pytest.param(
+            '[schema]\nchain = ["Requirement", "TestCase"]\n'
             '[statuses]\nRequirement = ["APPROVED", "DEPRECATED"]\nTestCase = ["GREEN"]\n'
             '[locations]\nRequirement = "r/*.toml"\nTestCase = "t/*.py"\n'
             '[[rules]]\nid = "R1"\nsource_type = "Requirement"\nwhen_status = "DEPRECATED"\n'
@@ -348,9 +372,24 @@ def test_cli_returns_exit_2_on_invalid_config(
         pytest.param(
             "REQ-1.toml",
             'status = "APPROVED"\n',
-            "# @trace TC-DUP GREEN [REQ-1]\n# @trace TC-DUP GREEN [REQ-1]\n",
+            "# @trace TC-DUP GREEN [REQ-1]\ndef test_a(): pass\n"
+            "# @trace TC-DUP GREEN [REQ-1]\ndef test_b(): pass\n",
             "duplicate node id 'TC-DUP'",
             id="duplicate_node_id",
+        ),
+        pytest.param(
+            "REQ-1.toml",
+            'status = "APPROVED"\n',
+            "# @trace TC-ORPHAN GREEN [REQ-1]\nx = 1\n",
+            "@trace must precede a function",
+            id="orphan_trace_without_def",
+        ),
+        pytest.param(
+            "REQ-1.toml",
+            'status = "APPROVED"\n',
+            "# @trace TC-1 GREEN [REQ-1, REQ-1]\ndef test_a(): pass\n",
+            "duplicate link targets",
+            id="duplicate_trace_links",
         ),
         pytest.param(
             "REQ-1.toml",
@@ -441,7 +480,7 @@ def test_cli_returns_exit_1_and_prints_violations(
 
     assert exit_code == 1
     assert captured.out.strip() == (
-        "REQ-1 [ERR_MISSING_LINK] (REQ-GREEN): requires >= 1 active TestCase"
+        "reqs/REQ-1.toml: REQ-1 [ERR_MISSING_LINK] (REQ-GREEN): requires >= 1 active TestCase"
     )
     assert captured.err == ""
 

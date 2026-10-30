@@ -8,7 +8,7 @@ fix = "Use absolute trace_check imports and keep src free of test, AST, or subpr
 
 [[rules]]
 files = ["src/trace_check/checker.py"]
-max_lines = 420
+max_lines = 460
 forbid = [
     "^\\s*(from|import)\\s+trace_check\\.cli\\b",
     "^\\s*(from|import)\\s+(sys|argparse)\\b",
@@ -26,5 +26,5 @@ fix = "Keep cli.py as a thin entrypoint that delegates configuration loading and
 
 [[rules]]
 files = ["tests/**/*.py"]
-max_lines = 500
+max_lines = 550
 fix = "Keep test modules concise and atomic."

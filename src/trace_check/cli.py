@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -33,14 +32,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         config = load_config(path)
-    except (
-        OSError,
-        tomllib.TOMLDecodeError,
-        KeyError,
-        ValueError,
-        TypeError,
-        SyntaxError,
-    ) as error:
+    except (OSError, ValueError) as error:
         print(f"{path} [ERR_CONFIG]: {error}", file=sys.stderr)
         return 2
 
