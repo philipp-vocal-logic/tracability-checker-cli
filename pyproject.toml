@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trace-check"
+version = "0.1.0"
+description = "Zero-noise CLI project traceability checker using Python stdlib."
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+trace-check = "trace_check.cli:main"
+
+[dependency-groups]
+dev = [
+    "archcheck",
+    "glossary-checker-cli",
+    "pytest>=8.0",
+    "ruff>=0.8",
+    "symbol-checker-cli",
+]
+
+[tool.uv.sources]
+archcheck = { path = "../architecture-checker-cli", editable = true }
+glossary-checker-cli = { path = "../glossary-checker-cli", editable = true }
+symbol-checker-cli = { path = "../symbol-checker-cli", editable = true }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C90", "RUF"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 6
