@@ -5,17 +5,7 @@ requires-python = ">=3.12"
 [[package]]
 name = "archcheck"
 version = "0.1.0"
-source = { editable = "../architecture-checker-cli" }
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "glossary-checker-cli", editable = "../glossary-checker-cli" },
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "ruff", specifier = ">=0.5" },
-    { name = "symbol-checker-cli", editable = "../symbol-checker-cli" },
-]
+source = { git = "https://github.com/philipp-vocal-logic/architecture-checker-cli.git?branch=main#75293f8d8fd04b9d20edddce06b7140acf4cf8b4" }
 
 [[package]]
 name = "colorama"
@@ -29,21 +19,9 @@ wheels = [
 [[package]]
 name = "glossary-checker-cli"
 version = "0.1.0"
-source = { editable = "../glossary-checker-cli" }
+source = { git = "https://github.com/philipp-vocal-logic/glossary-checker-cli.git?branch=main#67587e8ff059d3594c3dd09cdede78f75073383f" }
 dependencies = [
     { name = "pathspec" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "pathspec", specifier = ">=0.12.1" }]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "archcheck", editable = "../architecture-checker-cli" },
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "pytest-cov", specifier = ">=7.1.0" },
-    { name = "ruff", specifier = ">=0.8.0" },
-    { name = "symbol-checker-cli", editable = "../symbol-checker-cli" },
 ]
 
 [[package]]
@@ -135,20 +113,9 @@ wheels = [
 [[package]]
 name = "symbol-checker-cli"
 version = "0.1.0"
-source = { editable = "../symbol-checker-cli" }
+source = { git = "https://github.com/philipp-vocal-logic/symbol-checker-cli.git?branch=main#c0c48152a93e3fc95748be0af2058ec2f2699eeb" }
 dependencies = [
     { name = "pathspec" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "pathspec", specifier = ">=0.12.1" }]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "archcheck", editable = "../architecture-checker-cli" },
-    { name = "glossary-checker-cli", editable = "../glossary-checker-cli" },
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "ruff", specifier = ">=0.8.0" },
 ]
 
 [[package]]
@@ -169,9 +136,9 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "archcheck", editable = "../architecture-checker-cli" },
-    { name = "glossary-checker-cli", editable = "../glossary-checker-cli" },
+    { name = "archcheck", git = "https://github.com/philipp-vocal-logic/architecture-checker-cli.git?branch=main" },
+    { name = "glossary-checker-cli", git = "https://github.com/philipp-vocal-logic/glossary-checker-cli.git?branch=main" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.8" },
-    { name = "symbol-checker-cli", editable = "../symbol-checker-cli" },
+    { name = "symbol-checker-cli", git = "https://github.com/philipp-vocal-logic/symbol-checker-cli.git?branch=main" },
 ]
