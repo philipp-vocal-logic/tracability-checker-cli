@@ -1,0 +1,26 @@
+[settings]
+include = ["src/**/*.py", "tests/**/*.py"]
+exclude = []
+forbidden_subwords = [
+    "data",
+    "info",
+    "item",
+    "obj",
+    "val",
+    "temp",
+    "mgr",
+    "manager",
+    "helper",
+    "util",
+    "stuff",
+    "misc",
+]
+
+[replacements]
+load = ["fetch", "retrieve", "obtain", "read_config"]
+check = ["lint", "scan", "analyze", "inspect", "audit"]
+parse = ["decode_raw", "extract_field"]
+discover = ["find_nodes", "locate_nodes", "crawl"]
+build = ["construct", "make_object"]
+index = ["idx", "pos"]
+error = ["err", "exc"]

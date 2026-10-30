@@ -1,0 +1,44 @@
+[settings]
+paths = ["src", "tests", "trace", "README.md", "traceability.toml", "arch.toml", "pyproject.toml"]
+exclude = [
+    ".git/",
+    ".venv/",
+    ".pytest_cache/",
+    ".ruff_cache/",
+    "__pycache__/",
+    "*.egg-info/",
+    "glossary.toml",
+    "symbols.toml",
+    "uv.lock",
+]
+similarity_threshold = 0.65
+
+[[terms]]
+term = "node"
+definition = "A single traceability entry in the project graph, loaded from a TOML file or source comment."
+forbidden_terms = ["vertex", "entity", "artifact"]
+
+[[terms]]
+term = "chain"
+definition = "The ordered sequence of node types defining allowed adjacent links in the schema."
+forbidden_terms = ["hierarchy", "pipeline", "tier_list"]
+
+[[terms]]
+term = "status"
+definition = "The maturity label assigned to a node, such as DRAFT, APPROVED, GREEN, or DEPRECATED."
+forbidden_terms = ["stage", "phase", "lifecycle_state"]
+
+[[terms]]
+term = "link"
+definition = "A declared connection from one node to an adjacent node in the schema chain."
+forbidden_terms = ["pointer", "edge_ref", "backlink"]
+
+[[terms]]
+term = "rule"
+definition = "A declarative constraint requiring a source node with a given status to link to target nodes with expected statuses."
+forbidden_terms = ["policy", "convention", "ruleset"]
+
+[[terms]]
+term = "violation"
+definition = "A diagnostic line emitted when a node, link, or rule check fails."
+forbidden_terms = ["offense", "infringement", "breach"]
