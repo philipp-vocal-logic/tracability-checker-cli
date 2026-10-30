@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Running pre-commit checks..."
+
+if [[ -f uv.lock ]]; then
+    uv lock --check
+fi
+
+if [[ -d .venv ]]; then
+    uv run ruff check .
+    uv run ruff format --check .
+else
+    ruff check .
+    ruff format --check .
+fi
+
+if [[ -f glossary.toml ]]; then
+    uv run glossary
+fi
+
+if [[ -f symbols.toml ]]; then
+    uv run symbol
+fi
+
+if [[ -f arch.toml ]]; then
+    uv run architecture
+fi
+
+if [[ -f traceability.toml ]]; then
+    if [[ -d .venv ]]; then
+        uv run trace-check
+    else
+        PYTHONPATH=src python3 -m trace_check.cli
+    fi
+fi
+
+if [[ -d .venv ]]; then
+    uv run pytest
+else
+    pytest
+fi
+
+echo "All pre-commit checks passed."

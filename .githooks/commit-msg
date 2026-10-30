@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+commit_msg_file="$1"
+subject_line="$(head -n 1 "$commit_msg_file")"
+
+if [[ "$subject_line" =~ ^Merge\  ]] || [[ "$subject_line" =~ ^Revert\  ]]; then
+    exit 0
+fi
+
+pattern='^(feat|fix|refactor|test|docs|chore|build|ci|perf|style)(\([a-z0-9_./-]+\))?!?: .+'
+
+if ! [[ "$subject_line" =~ $pattern ]]; then
+    echo "ERROR: Invalid commit message subject:" >&2
+    echo "  $subject_line" >&2
+    echo "Suggestion: Use Conventional Commits format: <type>[optional scope]: <description>" >&2
+    echo "  Allowed types: feat, fix, refactor, test, docs, chore, build, ci, perf, style" >&2
+    echo "  Example: feat(checker): check class attribute annotations" >&2
+    exit 1
+fi
+
+if (( ${#subject_line} > 72 )); then
+    echo "ERROR: Commit message subject exceeds 72 characters (${#subject_line}/72):" >&2
+    echo "  $subject_line" >&2
+    echo "Suggestion: Keep the first line concise (<= 72 characters) and move details to the body." >&2
+    exit 1
+fi
