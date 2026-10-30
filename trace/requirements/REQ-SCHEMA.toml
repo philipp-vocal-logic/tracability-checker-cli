@@ -1,0 +1,5 @@
+id = "REQ-SCHEMA"
+type = "Requirement"
+status = "APPROVED"
+title = "Multiple schema chain and self-consistency validation"
+links = ["US-1"]

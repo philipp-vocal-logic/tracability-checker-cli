@@ -1,0 +1,5 @@
+id = "REQ-LIFECYCLE"
+type = "Requirement"
+status = "APPROVED"
+title = "Configurable node lifecycle statuses and deprecation rules"
+links = ["US-1"]

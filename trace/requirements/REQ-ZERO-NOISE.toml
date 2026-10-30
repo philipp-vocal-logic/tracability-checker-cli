@@ -1,0 +1,5 @@
+id = "REQ-ZERO-NOISE"
+type = "Requirement"
+status = "APPROVED"
+title = "Zero-noise CLI output and exit codes for coding agents"
+links = ["US-1"]
