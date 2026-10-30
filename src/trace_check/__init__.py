@@ -1,5 +1,23 @@
 """Zero-noise project traceability CLI checker."""
 
-from trace_check.checker import Config, Node, Rule, check_config, load_config
+from trace_check.checker import (
+    Config,
+    Node,
+    Rule,
+    Violation,
+    check_config,
+    check_violations,
+    load_config,
+    trace,
+)
 
-__all__ = ["Config", "Node", "Rule", "check_config", "load_config"]
+__all__ = [
+    "Config",
+    "Node",
+    "Rule",
+    "Violation",
+    "check_config",
+    "check_violations",
+    "load_config",
+    "trace",
+]

@@ -1,22 +1,24 @@
-"""Core data structures, git-friendly node discovery, and validation rules."""
+"""Core data structures, AST-based @trace discovery, and validation rules."""
 
 from __future__ import annotations
 
-import io
+import ast
 import re
-import tokenize
 import tomllib
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+DEFAULT_ACTIVE_STATUS = "APPROVED"
 DEFAULT_DEPRECATED_STATUS = "DEPRECATED"
 NODE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-TRACE_COMMENT_RE = re.compile(r"^\s*#\s*@trace\b")
-TRACE_DIRECTIVE_RE = re.compile(
-    r"^\s*#\s*@trace\s+(?P<id>[A-Za-z0-9_-]+)\s+(?P<status>[A-Za-z0-9_-]+)"
-    r"(?:\s+\[(?P<links>[^\]]*)\])?\s*$"
-)
+ALLOWED_CONFIG_KEYS = frozenset({"schema", "statuses", "locations", "rules"})
+ALLOWED_SCHEMA_KEYS = frozenset({"chain", "deprecated_status"})
+ALLOWED_RULE_KEYS = frozenset({"id", "source_type", "when_status", "target_type", "target_status"})
+ALLOWED_NODE_KEYS = frozenset({"id", "type", "status", "title", "description", "links"})
+
+DecoratedStmt = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,28 @@ class Rule:
 
 
 @dataclass(frozen=True)
+class Violation:
+    """A single traceability check violation."""
+
+    code: str
+    message: str
+    node_id: str
+    location: str = ""
+    rule_id: str | None = None
+
+    def format(self) -> str:
+        """Format violation as a single-line diagnostic string."""
+        prefix = f"{self.location}: {self.node_id}" if self.location else self.node_id
+        rule_suffix = f" ({self.rule_id})" if self.rule_id else ""
+        return f"{prefix} [{self.code}]{rule_suffix}: {self.message}"
+
+    def to_dict(self) -> dict[str, str | None]:
+        """Serialize violation for JSON output."""
+        keys = ("location", "node_id", "code", "rule_id", "message")
+        return {k: getattr(self, k) for k in keys}
+
+
+@dataclass(frozen=True)
 class Config:
     """Loaded traceability schema, statuses, rules, and discovered nodes."""
 
@@ -52,10 +76,14 @@ class Config:
     deprecated_status: str = DEFAULT_DEPRECATED_STATUS
 
 
-ALLOWED_CONFIG_KEYS = frozenset({"schema", "statuses", "locations", "rules"})
-ALLOWED_SCHEMA_KEYS = frozenset({"chain", "deprecated_status"})
-ALLOWED_RULE_KEYS = frozenset({"id", "source_type", "when_status", "target_type", "target_status"})
-ALLOWED_NODE_KEYS = frozenset({"id", "type", "status", "title", "description", "links"})
+def trace(
+    *targets: str,
+    id: str | None = None,
+    status: str = DEFAULT_ACTIVE_STATUS,
+    links: Sequence[str] = (),
+) -> Callable[[Any], Any]:
+    """Annotate a test function with traceability links and optional node id or status."""
+    return lambda func: func
 
 
 def _require_table(value: Any, name: str) -> dict[str, Any]:
@@ -107,15 +135,11 @@ def allowed_edges(chain: tuple[str, ...]) -> set[frozenset[str]]:
     return {frozenset((chain[i], chain[i + 1])) for i in range(len(chain) - 1)}
 
 
-def _parse_statuses(
-    chain: tuple[str, ...], raw_statuses: dict[str, Any]
-) -> dict[str, frozenset[str]]:
-    unknown = sorted(set(raw_statuses) - set(chain))
+def _parse_statuses(chain: tuple[str, ...], raw: dict[str, Any]) -> dict[str, frozenset[str]]:
+    unknown = sorted(set(raw) - set(chain))
     if unknown:
         raise ValueError(f"statuses defined for unknown node types: {unknown}")
-    statuses = {
-        t: frozenset(_as_str_tuple(raw_statuses.get(t, ()), f"statuses.{t}")) for t in chain
-    }
+    statuses = {t: frozenset(_as_str_tuple(raw.get(t, ()), f"statuses.{t}")) for t in chain}
     missing = [t for t, allowed in statuses.items() if not allowed]
     if missing:
         raise ValueError(f"missing statuses configuration for node types: {missing}")
@@ -131,60 +155,40 @@ def _validate_location_pattern(node_type: str, raw_pattern: Any) -> str:
     return pattern
 
 
-def _parse_locations(chain: tuple[str, ...], raw_locations: dict[str, Any]) -> dict[str, str]:
-    unknown = sorted(set(raw_locations) - set(chain))
+def _parse_locations(chain: tuple[str, ...], raw: dict[str, Any]) -> dict[str, str]:
+    unknown = sorted(set(raw) - set(chain))
     if unknown:
         raise ValueError(f"locations defined for unknown node types: {unknown}")
-    missing = [t for t in chain if t not in raw_locations]
+    missing = [t for t in chain if t not in raw]
     if missing:
         raise ValueError(f"missing locations configuration for node types: {missing}")
-    return {t: _validate_location_pattern(t, raw_locations[t]) for t in chain}
+    return {t: _validate_location_pattern(t, raw[t]) for t in chain}
 
 
 def _validate_rule(
-    rule: Rule,
-    statuses: dict[str, frozenset[str]],
-    edges: set[frozenset[str]],
-    deprecated_status: str = DEFAULT_DEPRECATED_STATUS,
+    r: Rule, statuses: dict[str, frozenset[str]], edges: set[frozenset[str]], depr: str
 ) -> None:
-    if frozenset((rule.source_type, rule.target_type)) not in edges:
-        raise ValueError(
-            f"rule '{rule.id}': '{rule.source_type}' <-> '{rule.target_type}' not in schema.chain"
-        )
-    if rule.when_status not in statuses[rule.source_type] or rule.when_status == deprecated_status:
-        raise ValueError(
-            f"rule '{rule.id}': when_status '{rule.when_status}' not in {rule.source_type} statuses"
-        )
-    invalid = [
-        s
-        for s in rule.target_status
-        if s not in statuses[rule.target_type] or s == deprecated_status
-    ]
-    if not rule.target_status or invalid:
-        raise ValueError(
-            f"rule '{rule.id}': invalid target_status {list(rule.target_status)} "
-            f"for {rule.target_type}"
-        )
+    s = f"rule '{r.id}'"
+    if frozenset((r.source_type, r.target_type)) not in edges:
+        raise ValueError(f"{s}: '{r.source_type}' <-> '{r.target_type}' not in schema.chain")
+    if r.when_status not in statuses[r.source_type] or r.when_status == depr:
+        raise ValueError(f"{s}: when_status '{r.when_status}' not in {r.source_type} statuses")
+    invalid = [x for x in r.target_status if x not in statuses[r.target_type] or x == depr]
+    if not r.target_status or invalid:
+        raise ValueError(f"{s}: invalid target_status {list(r.target_status)} for {r.target_type}")
 
 
 def _parse_rule(raw: Any) -> Rule:
-    table = _require_table(raw, "rule")
-    _check_allowed_keys(table, ALLOWED_RULE_KEYS, "rule")
-    rule_id = _require_str(table, "id", "rule")
-    return Rule(
-        id=rule_id,
-        source_type=_require_str(table, "source_type", f"rule '{rule_id}'"),
-        when_status=_require_str(table, "when_status", f"rule '{rule_id}'"),
-        target_type=_require_str(table, "target_type", f"rule '{rule_id}'"),
-        target_status=_as_str_tuple(table.get("target_status"), f"rule '{rule_id}' target_status"),
-    )
+    t = _require_table(raw, "rule")
+    _check_allowed_keys(t, ALLOWED_RULE_KEYS, "rule")
+    rid = _require_str(t, "id", "rule")
+    s = f"rule '{rid}'"
+    fields = (_require_str(t, k, s) for k in ("source_type", "when_status", "target_type"))
+    return Rule(rid, *fields, _as_str_tuple(t.get("target_status"), f"{s} target_status"))
 
 
 def _parse_rules(
-    raw_rules: Any,
-    statuses: dict[str, frozenset[str]],
-    edges: set[frozenset[str]],
-    deprecated_status: str,
+    raw_rules: Any, statuses: dict[str, frozenset[str]], edges: set[frozenset[str]], depr: str
 ) -> tuple[Rule, ...]:
     if not isinstance(raw_rules, (list, tuple)):
         raise ValueError("'rules' must be a list of tables")
@@ -195,17 +199,24 @@ def _parse_rules(
         if rule.id in seen_ids:
             raise ValueError(f"duplicate rule id '{rule.id}'")
         seen_ids.add(rule.id)
-        _validate_rule(rule, statuses, edges, deprecated_status)
+        _validate_rule(rule, statuses, edges, depr)
         rules.append(rule)
     return tuple(rules)
 
 
+def _validate_node_id(node_id: str, scope: str) -> str:
+    if not NODE_ID_RE.match(node_id):
+        raise ValueError(f"{scope}: invalid node id '{node_id}'")
+    return node_id
+
+
 def _dedup_links(links: tuple[str, ...], scope: str) -> tuple[str, ...]:
-    if any(not NODE_ID_RE.match(link) for link in links):
-        raise ValueError(f"{scope}: invalid link target id in {list(links)}")
-    if len(set(links)) != len(links):
-        raise ValueError(f"{scope}: duplicate link targets in {list(links)}")
-    return links
+    cleaned = tuple(link.strip() for link in links)
+    if any(not link for link in cleaned):
+        raise ValueError(f"{scope}: empty link target in {list(links)}")
+    if len(set(cleaned)) != len(cleaned):
+        raise ValueError(f"{scope}: duplicate link targets in {list(cleaned)}")
+    return cleaned
 
 
 def _load_toml_node(path: Path, expected_type: str, rel_path: str) -> Node:
@@ -213,89 +224,121 @@ def _load_toml_node(path: Path, expected_type: str, rel_path: str) -> Node:
         with path.open("rb") as f:
             raw = tomllib.load(f)
     except tomllib.TOMLDecodeError as error:
-        raise ValueError(f"{path}: {error}") from error
-    _check_allowed_keys(raw, ALLOWED_NODE_KEYS, str(path))
-    node_id = _require_str(raw, "id", str(path)) if "id" in raw else path.stem
-    if node_id != path.stem:
-        raise ValueError(f"{path}: id '{node_id}' does not match filename '{path.stem}'")
-    node_type = _require_str(raw, "type", str(path)) if "type" in raw else expected_type
+        raise ValueError(f"{rel_path}: {error}") from error
+    _check_allowed_keys(raw, ALLOWED_NODE_KEYS, rel_path)
+    raw_id = _require_str(raw, "id", rel_path) if "id" in raw else path.stem
+    if raw_id != path.stem:
+        raise ValueError(f"{rel_path}: id '{raw_id}' does not match filename '{path.stem}'")
+    node_id = _validate_node_id(raw_id, rel_path)
+    node_type = _require_str(raw, "type", rel_path) if "type" in raw else expected_type
     if node_type != expected_type:
-        raise ValueError(
-            f"{path}: type '{node_type}' does not match location type '{expected_type}'"
-        )
-    status = _require_str(raw, "status", str(path))
-    links = _dedup_links(_as_str_tuple(raw.get("links", ()), f"{path}: links"), f"{path}: links")
-    return Node(id=node_id, type=node_type, status=status, links=links, location=rel_path)
+        msg = f"{rel_path}: type '{node_type}' does not match location type '{expected_type}'"
+        raise ValueError(msg)
+    status = _require_str(raw, "status", rel_path)
+    links_scope = f"{rel_path}: links"
+    links = _dedup_links(_as_str_tuple(raw.get("links", ()), links_scope), links_scope)
+    return Node(node_id, node_type, status, links, rel_path)
 
 
-def _parse_trace_links(raw_links: str | None, scope: str) -> tuple[str, ...]:
-    if not raw_links or not raw_links.strip():
-        return ()
-    return _dedup_links(tuple(part.strip() for part in raw_links.split(",")), scope)
+def _is_trace_decorator(expr: ast.expr) -> bool:
+    target = expr.func if isinstance(expr, ast.Call) else expr
+    return (isinstance(target, ast.Name) and target.id == "trace") or (
+        isinstance(target, ast.Attribute) and target.attr == "trace"
+    )
 
 
-def _tokenize_python(path: Path) -> list[tokenize.TokenInfo]:
-    try:
-        text = path.read_text(encoding="utf-8")
-        return list(tokenize.generate_tokens(io.StringIO(text).readline))
-    except (UnicodeDecodeError, tokenize.TokenError, IndentationError, SyntaxError) as error:
-        raise ValueError(f"{path}: {error}") from error
+def _parse_str_constant(expr: ast.expr, scope: str, label: str) -> str:
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, str) and expr.value.strip():
+        return expr.value.strip()
+    raise ValueError(f"{scope}: malformed @trace decorator: {label} must be a non-empty string")
 
 
-def _is_trace_token(tok: tokenize.TokenInfo) -> bool:
-    return tok.type == tokenize.COMMENT and bool(TRACE_COMMENT_RE.match(tok.string))
+def _parse_trace_kw_value(kw: ast.keyword, scope: str) -> Any:
+    if kw.arg == "links":
+        if not isinstance(kw.value, (ast.List, ast.Tuple)):
+            raise ValueError(f"{scope}: malformed @trace decorator: 'links' must be a list")
+        return tuple(_parse_str_constant(elt, scope, "link") for elt in kw.value.elts)
+    if kw.arg in {"id", "status"}:
+        return _parse_str_constant(kw.value, scope, f"'{kw.arg}'")
+    raise ValueError(f"{scope}: malformed @trace decorator: unknown keyword '{kw.arg}'")
 
 
-def _parse_trace_directive(path: Path, tok: tokenize.TokenInfo, node_type: str, rel: str) -> Node:
-    lineno, line = tok.start[0], tok.string
-    match = TRACE_DIRECTIVE_RE.match(line)
-    if match is None:
-        raise ValueError(f"{path}:{lineno}: malformed @trace directive: {line.strip()}")
-    links = _parse_trace_links(match.group("links"), f"{path}:{lineno}")
-    return Node(match.group("id"), node_type, match.group("status"), links, f"{rel}:{lineno}")
+def _parse_trace_call(call: ast.expr, func_name: str, node_type: str, rel_path: str) -> Node:
+    scope = f"{rel_path}:{call.lineno}"
+    if not isinstance(call, ast.Call):
+        raise ValueError(f"{scope}: malformed @trace decorator: expected @trace(...)")
+    arg_links = tuple(_parse_str_constant(arg, scope, "link") for arg in call.args)
+    kw_map = {kw.arg: _parse_trace_kw_value(kw, scope) for kw in call.keywords}
+    if arg_links and "links" in kw_map:
+        raise ValueError(f"{scope}: malformed @trace decorator: duplicate links specification")
+    raw_links = arg_links or kw_map.get("links", ())
+    node_id = _validate_node_id(kw_map.get("id", func_name), scope)
+    status = kw_map.get("status", DEFAULT_ACTIVE_STATUS)
+    return Node(node_id, node_type, status, _dedup_links(raw_links, scope), scope)
+
+
+def _check_decorated_stmt(stmt: DecoratedStmt, node_type: str, rel_path: str) -> Node | None:
+    trace_decs = list(filter(_is_trace_decorator, stmt.decorator_list))
+    if not trace_decs:
+        return None
+    scope = f"{rel_path}:{trace_decs[0].lineno}"
+    if isinstance(stmt, ast.ClassDef) or not stmt.name.startswith("test_"):
+        raise ValueError(f"{scope}: @trace must decorate a test_* function, got '{stmt.name}'")
+    if len(trace_decs) > 1:
+        raise ValueError(f"{scope}: duplicate @trace decorator on '{stmt.name}'")
+    return _parse_trace_call(trace_decs[0], stmt.name, node_type, rel_path)
 
 
 def _load_source_nodes(path: Path, node_type: str, rel_path: str) -> list[Node]:
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel_path)
+    except (UnicodeDecodeError, SyntaxError) as error:
+        raise ValueError(f"{rel_path}: {error}") from error
+    stmts = sorted(
+        (n for n in ast.walk(tree) if isinstance(n, DecoratedStmt)), key=lambda s: s.lineno
+    )
     nodes: list[Node] = []
-    pending_line: int | None = None
-    for tok in _tokenize_python(path):
-        if tok.type == tokenize.NAME and tok.string == "def":
-            pending_line = None
-        elif _is_trace_token(tok):
-            node = _parse_trace_directive(path, tok, node_type, rel_path)
-            if pending_line is not None:
-                raise ValueError(f"{path}:{pending_line}: @trace must precede a function")
-            pending_line = tok.start[0]
-            nodes.append(node)
-    if pending_line is not None:
-        raise ValueError(f"{path}:{pending_line}: @trace must precede a function")
+    errors: list[str] = []
+    for stmt in stmts:
+        try:
+            if (node := _check_decorated_stmt(stmt, node_type, rel_path)) is not None:
+                nodes.append(node)
+        except ValueError as error:
+            errors.append(str(error))
+    if errors:
+        raise ValueError("; ".join(errors))
     return nodes
 
 
-def _nodes_from_file(path: Path, node_type: str, base_dir: Path) -> list[Node]:
+def _discover_file_nodes(
+    path: Path, node_type: str, base_dir: Path, discovered: dict[str, Node], errors: list[str]
+) -> None:
     rel_path = path.relative_to(base_dir).as_posix()
-    if path.suffix == ".toml":
-        return [_load_toml_node(path, node_type, rel_path)]
-    if path.suffix == ".py":
-        return _load_source_nodes(path, node_type, rel_path)
-    raise ValueError(f"{path}: unsupported node file extension '{path.suffix}'")
-
-
-def _iter_location_files(base_dir: Path, pattern: str) -> list[Path]:
     try:
-        return [p for p in sorted(base_dir.glob(pattern)) if p.is_file()]
-    except (NotImplementedError, ValueError) as error:
-        raise ValueError(f"invalid location pattern '{pattern}': {error}") from error
+        file_nodes = (
+            [_load_toml_node(path, node_type, rel_path)]
+            if path.suffix == ".toml"
+            else _load_source_nodes(path, node_type, rel_path)
+        )
+    except ValueError as error:
+        errors.append(str(error))
+        return
+    for node in file_nodes:
+        if node.id in discovered:
+            errors.append(f"{rel_path}: duplicate node id '{node.id}'")
+        else:
+            discovered[node.id] = node
 
 
 def _discover_nodes(base_dir: Path, locations: dict[str, str]) -> dict[str, Node]:
     discovered: dict[str, Node] = {}
+    errors: list[str] = []
     for node_type, pattern in locations.items():
-        for file_path in _iter_location_files(base_dir, pattern):
-            for node in _nodes_from_file(file_path, node_type, base_dir):
-                if node.id in discovered:
-                    raise ValueError(f"duplicate node id '{node.id}' found in {file_path}")
-                discovered[node.id] = node
+        for file_path in sorted(base_dir.glob(pattern)):
+            if file_path.is_file():
+                _discover_file_nodes(file_path, node_type, base_dir, discovered, errors)
+    if errors:
+        raise ValueError("; ".join(errors))
     if not discovered:
         raise ValueError("no traceability nodes discovered for configured locations")
     return discovered
@@ -314,99 +357,85 @@ def load_config(path: Path) -> Config:
         chain, _require_table(raw_config.get("locations", {}), "locations")
     )
     edges = allowed_edges(chain)
-    deprecated_status = _parse_deprecated_status(schema, statuses)
-    rules = _parse_rules(raw_config.get("rules", ()), statuses, edges, deprecated_status)
-    nodes = _discover_nodes(path.parent, locations)
-    return Config(
-        chain=chain,
-        statuses=statuses,
-        rules=rules,
-        nodes=nodes,
-        deprecated_status=deprecated_status,
-    )
+    depr = _parse_deprecated_status(schema, statuses)
+    rules = _parse_rules(raw_config.get("rules", ()), statuses, edges, depr)
+    return Config(chain, statuses, rules, _discover_nodes(path.parent, locations), depr)
 
 
-def build_adjacency(
-    nodes: dict[str, Node], edges: set[frozenset[str]] | None = None
-) -> dict[str, set[str]]:
+def build_adjacency(nodes: dict[str, Node], edges: set[frozenset[str]]) -> dict[str, set[str]]:
     """Normalize declared links into an undirected adjacency map of valid existing nodes."""
     adj: dict[str, set[str]] = {node_id: set() for node_id in nodes}
     for node in nodes.values():
         for target_id in node.links:
             target = nodes.get(target_id)
-            if target and (edges is None or frozenset((node.type, target.type)) in edges):
+            if target and frozenset((node.type, target.type)) in edges:
                 adj[node.id].add(target_id)
                 adj[target_id].add(node.id)
     return adj
 
 
-def _node_prefix(node: Node) -> str:
-    return f"{node.location}: {node.id}" if node.location else node.id
-
-
-def _check_node_schema(node: Node, statuses: dict[str, frozenset[str]]) -> list[str]:
-    prefix = _node_prefix(node)
+def _check_node_schema(node: Node, statuses: dict[str, frozenset[str]]) -> list[Violation]:
     allowed = statuses.get(node.type)
     if allowed is None:
-        return [f"{prefix} [ERR_UNKNOWN_TYPE]: unknown type '{node.type}'"]
+        msg = f"unknown type '{node.type}'"
+        return [Violation("ERR_UNKNOWN_TYPE", msg, node.id, node.location)]
     if node.status not in allowed:
-        return [f"{prefix} [ERR_INVALID_STATUS]: invalid status '{node.status}' for {node.type}"]
+        msg = f"invalid status '{node.status}' for {node.type}"
+        return [Violation("ERR_INVALID_STATUS", msg, node.id, node.location)]
     return []
 
 
 def _check_declared_links(
-    node: Node, nodes: dict[str, Node], edges: set[frozenset[str]], deprecated_status: str
-) -> list[str]:
-    prefix = _node_prefix(node)
-    errors: list[str] = []
-    for target_id in node.links:
-        target = nodes.get(target_id)
+    node: Node, nodes: dict[str, Node], edges: set[frozenset[str]], depr: str
+) -> list[Violation]:
+    violations: list[Violation] = []
+    for tid in node.links:
+        target = nodes.get(tid)
         if target is None:
-            errors.append(f"{prefix} [ERR_DANGLING_LINK]: target '{target_id}' does not exist")
+            msg = f"target '{tid}' does not exist"
+            violations.append(Violation("ERR_DANGLING_LINK", msg, node.id, node.location))
         elif frozenset((node.type, target.type)) not in edges:
-            msg = f"cannot link {node.type} to {target.type} ('{target_id}')"
-            errors.append(f"{prefix} [ERR_INVALID_EDGE]: {msg}")
-        elif node.status != deprecated_status and target.status == deprecated_status:
-            msg = f"active {node.type} links to {deprecated_status} {target.type} '{target_id}'"
-            errors.append(f"{prefix} [ERR_DEPRECATED_LINK]: {msg}")
-    return errors
+            msg = f"cannot link {node.type} to {target.type} ('{tid}')"
+            violations.append(Violation("ERR_INVALID_EDGE", msg, node.id, node.location))
+        elif node.status != depr and target.status == depr:
+            msg = f"active {node.type} links to {depr} {target.type} '{tid}'"
+            violations.append(Violation("ERR_DEPRECATED_LINK", msg, node.id, node.location))
+    return violations
 
 
 def _check_rule_for_node(
-    node: Node,
-    rule: Rule,
-    neighbors: set[str],
-    nodes: dict[str, Node],
-    deprecated_status: str,
-) -> list[str]:
-    if node.status == deprecated_status or (node.type, node.status) != (
-        rule.source_type,
-        rule.when_status,
-    ):
+    node: Node, rule: Rule, neighbors: set[str], nodes: dict[str, Node], depr: str
+) -> list[Violation]:
+    if node.status == depr or (node.type, node.status) != (rule.source_type, rule.when_status):
         return []
-    prefix = _node_prefix(node)
     targets = [
         nodes[tid]
         for tid in sorted(neighbors)
-        if nodes[tid].type == rule.target_type and nodes[tid].status != deprecated_status
+        if nodes[tid].type == rule.target_type and nodes[tid].status != depr
     ]
     if not targets:
-        return [f"{prefix} [ERR_MISSING_LINK] ({rule.id}): requires >= 1 active {rule.target_type}"]
+        msg = f"requires >= 1 active {rule.target_type}"
+        return [Violation("ERR_MISSING_LINK", msg, node.id, node.location, rule.id)]
     expected = list(rule.target_status)
     return [
-        f"{prefix} [ERR_TARGET_STATUS] ({rule.id}): "
-        f"linked {t.type} '{t.id}' is '{t.status}', expected {expected}"
+        Violation(
+            "ERR_TARGET_STATUS",
+            f"linked {t.type} '{t.id}' is '{t.status}', expected {expected}",
+            node.id,
+            node.location,
+            rule.id,
+        )
         for t in targets
         if t.status not in rule.target_status
     ]
 
 
-def check_config(config: Config) -> list[str]:
-    """Validate all nodes, links, deprecations, and rules; return sorted violation lines."""
+def check_violations(config: Config) -> list[Violation]:
+    """Validate all nodes, links, deprecations, and rules; return sorted Violation objects."""
     edges = allowed_edges(config.chain)
     adj = build_adjacency(config.nodes, edges)
     depr = config.deprecated_status
-    violations: list[str] = []
+    violations: list[Violation] = []
 
     for node_id in sorted(config.nodes):
         node = config.nodes[node_id]
@@ -419,3 +448,8 @@ def check_config(config: Config) -> list[str]:
             violations.extend(_check_rule_for_node(node, rule, adj[node_id], config.nodes, depr))
 
     return violations
+
+
+def check_config(config: Config) -> list[str]:
+    """Validate all nodes, links, deprecations, and rules; return sorted violation lines."""
+    return [violation.format() for violation in check_violations(config)]

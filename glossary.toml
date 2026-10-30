@@ -15,7 +15,7 @@ similarity_threshold = 0.65
 
 [[terms]]
 term = "node"
-definition = "A single traceability entry in the project graph, loaded from a TOML file or source comment."
+definition = "A single traceability entry in the project graph, loaded from a TOML file or source annotation."
 forbidden_terms = ["vertex", "entity", "artifact"]
 
 [[terms]]
@@ -25,7 +25,7 @@ forbidden_terms = ["hierarchy", "pipeline", "tier_list"]
 
 [[terms]]
 term = "status"
-definition = "The maturity label assigned to a node, such as DRAFT, APPROVED, GREEN, or DEPRECATED."
+definition = "The maturity label assigned to a node, such as DRAFT, APPROVED, or DEPRECATED."
 forbidden_terms = ["stage", "phase", "lifecycle_state"]
 
 [[terms]]

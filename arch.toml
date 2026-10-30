@@ -1,10 +1,10 @@
 [[rules]]
 files = ["src/**/*.py"]
 forbid = [
-    "^\\s*(from|import)\\s+(pytest|tests|subprocess|ast)\\b",
+    "^\\s*(from|import)\\s+(pytest|tests|subprocess|tokenize)\\b",
     "^\\s*from\\s+\\.",
 ]
-fix = "Use absolute trace_check imports and keep src free of test, AST, or subprocess dependencies."
+fix = "Use absolute trace_check imports and keep src free of test, tokenize, or subprocess dependencies."
 
 [[rules]]
 files = ["src/trace_check/checker.py"]
@@ -20,7 +20,7 @@ fix = "Import direction is cli -> checker. Keep CLI parsing and stdout/stderr pr
 files = ["src/trace_check/cli.py"]
 max_lines = 80
 forbid = [
-    "^\\s*(from|import)\\s+(re|tokenize|io)\\b",
+    "^\\s*(from|import)\\s+(re|ast|tomllib)\\b",
 ]
 fix = "Keep cli.py as a thin entrypoint that delegates configuration loading and validation to checker.py."
 

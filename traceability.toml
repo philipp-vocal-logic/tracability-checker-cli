@@ -4,7 +4,7 @@ chain = ["Story", "Requirement", "TestCase"]
 [statuses]
 Story = ["DRAFT", "APPROVED", "DEPRECATED"]
 Requirement = ["DRAFT", "APPROVED", "DEPRECATED"]
-TestCase = ["DRAFT", "RED", "GREEN", "DEPRECATED"]
+TestCase = ["DRAFT", "APPROVED", "DEPRECATED"]
 
 [locations]
 Story = "trace/stories/*.toml"
@@ -26,15 +26,15 @@ target_type = "Story"
 target_status = ["APPROVED"]
 
 [[rules]]
-id = "APPROVED-REQ-ALL-TESTS-GREEN"
+id = "APPROVED-REQ-NEEDS-TEST"
 source_type = "Requirement"
 when_status = "APPROVED"
 target_type = "TestCase"
-target_status = ["GREEN"]
+target_status = ["APPROVED"]
 
 [[rules]]
-id = "GREEN-TEST-NEEDS-REQ"
+id = "APPROVED-TEST-NEEDS-REQ"
 source_type = "TestCase"
-when_status = "GREEN"
+when_status = "APPROVED"
 target_type = "Requirement"
 target_status = ["DRAFT", "APPROVED"]

@@ -5,14 +5,14 @@ Zero-noise CLI project traceability checker using only the Python standard libra
 ## Usage
 
 ```bash
-trace-check [traceability.toml]
+trace-check [--format {text,json}] [traceability.toml]
 ```
 
 ### Exit Codes
 
-- `0`: All traceability rules and links pass (silent output).
-- `1`: One or more traceability violations found (printed to `stdout` as `<location>: <id> [<ERR_CODE>]: <message>`, one per line).
-- `2`: Configuration or node discovery error (printed to `stderr` with `[ERR_CONFIG]`).
+- `0`: All traceability rules and links pass (silent output in `text` mode; `{"ok": true, "violations": []}` in `json` mode).
+- `1`: One or more traceability violations found (printed to `stdout` as `<location>: <id> [<ERR_CODE>][ (<rule_id>)]: <message>` in `text` mode, or structured JSON in `json` mode).
+- `2`: Configuration or node discovery error (printed to `stderr` with `[ERR_CONFIG]` in `text` mode, or structured JSON in `json` mode).
 
 ## Configuration (`traceability.toml`)
 
@@ -23,7 +23,7 @@ chain = ["Story", "Requirement", "TestCase"]
 [statuses]
 Story = ["DRAFT", "APPROVED", "DEPRECATED"]
 Requirement = ["DRAFT", "APPROVED", "DEPRECATED"]
-TestCase = ["DRAFT", "RED", "GREEN", "DEPRECATED"]
+TestCase = ["DRAFT", "APPROVED", "DEPRECATED"]
 
 [locations]
 Story = "trace/stories/*.toml"
@@ -31,11 +31,11 @@ Requirement = "trace/requirements/*.toml"
 TestCase = "tests/test_*.py"
 
 [[rules]]
-id = "APPROVED-REQ-ALL-TESTS-GREEN"
+id = "APPROVED-REQ-NEEDS-TEST"
 source_type = "Requirement"
 when_status = "APPROVED"
 target_type = "TestCase"
-target_status = ["GREEN"]
+target_status = ["APPROVED"]
 ```
 
 Each rule requires that every active node of `source_type` with status `when_status` links to at least one active node of adjacent `target_type`, and that all linked active nodes of `target_type` have a status in `target_status`.
@@ -43,9 +43,12 @@ Each rule requires that every active node of `source_type` with status `when_sta
 ## Node Definitions
 
 - **TOML nodes** (`*.toml`): One node per file (`id` defaults to filename stem, `type` defaults to location type, required `status`, optional `links`, `title`, `description`).
-- **Source nodes** (comments in `.py` files, placed before a `def` function definition; `trace-check` validates static traceability while `pytest` verifies test execution):
+- **Source nodes** (`@trace` decorator on `def test_*` functions in `.py` files, parsed statically via `ast`; `id` defaults to the test function name and `status` defaults to `"APPROVED"`):
   ```python
-  # @trace TC-EXAMPLE GREEN [REQ-1, REQ-2]
+  from trace_check import trace
+
+
+  @trace("REQ-1", "REQ-2")
   def test_example() -> None: ...
   ```
 

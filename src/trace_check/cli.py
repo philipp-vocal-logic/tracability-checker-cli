@@ -1,13 +1,14 @@
-"""CLI entrypoint for trace-check with zero-noise output for agentic tools."""
+"""CLI entrypoint for trace-check with zero-noise text and JSON output."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from trace_check.checker import check_config, load_config
+from trace_check.checker import Violation, check_violations, load_config
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -22,7 +23,41 @@ def build_parser() -> argparse.ArgumentParser:
         default="traceability.toml",
         help="Path to traceability TOML file (default: traceability.toml)",
     )
+    parser.add_argument(
+        "--format",
+        choices=("text", "json"),
+        default="text",
+        help="Output format (default: text)",
+    )
     return parser
+
+
+def _emit_config_error(path: Path, error: Exception, output_format: str) -> int:
+    if output_format == "json":
+        payload = {
+            "ok": False,
+            "error": {"code": "ERR_CONFIG", "path": str(path), "message": str(error)},
+            "violations": [],
+        }
+        print(json.dumps(payload), file=sys.stderr)
+    else:
+        print(f"{path} [ERR_CONFIG]: {error}", file=sys.stderr)
+    return 2
+
+
+def _emit_violations(violations: list[Violation], output_format: str) -> int:
+    if output_format == "json":
+        payload = {
+            "ok": not violations,
+            "violations": [violation.to_dict() for violation in violations],
+        }
+        print(json.dumps(payload))
+        return 0 if not violations else 1
+    if not violations:
+        return 0
+    for violation in violations:
+        print(violation.format())
+    return 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -33,16 +68,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         config = load_config(path)
     except (OSError, ValueError) as error:
-        print(f"{path} [ERR_CONFIG]: {error}", file=sys.stderr)
-        return 2
+        return _emit_config_error(path, error, args.format)
 
-    violations = check_config(config)
-    if not violations:
-        return 0
-
-    for line in violations:
-        print(line)
-    return 1
+    return _emit_violations(check_violations(config), args.format)
 
 
 if __name__ == "__main__":
