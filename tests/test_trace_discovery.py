@@ -149,3 +149,158 @@ def test_duplicate_node_id_reports_first_location(
         "tests/test_b.py: duplicate node id 'TC-1' (first defined at tests/test_a.py:2)"
         in capsys.readouterr().err
     )
+
+
+@trace("REQ-SCHEMA")
+@pytest.mark.parametrize(
+    ("filename", "source", "expected_id", "expected_status", "expected_links", "line"),
+    [
+        pytest.param(
+            "test_calc.c",
+            '/* @trace("REQ-1") */\nvoid test_multiply(void) {\n}\n',
+            "tests/test_calc.c::test_multiply",
+            "APPROVED",
+            ("REQ-1",),
+            1,
+            id="ansi_c_block_comment_good",
+        ),
+        pytest.param(
+            "test_calc.c",
+            '/** @trace("REQ-1", id="TC-C89", status="DRAFT") */\n'
+            "int test_add(void) { return 0; }\n",
+            "TC-C89",
+            "DRAFT",
+            ("REQ-1",),
+            1,
+            id="ansi_c_doc_comment_explicit_id_and_status",
+        ),
+        pytest.param(
+            "test_calc.cpp",
+            '// @trace("REQ-1")\nTEST(CalcSuite, MultiplyCase) {\n}\n',
+            "tests/test_calc.cpp::CalcSuite_MultiplyCase",
+            "APPROVED",
+            ("REQ-1",),
+            1,
+            id="cpp_gtest_macro_good",
+        ),
+        pytest.param(
+            "test_calc.hpp",
+            '/* @trace(links=["REQ-1", "REQ-2"]) */\nTEST_F(FixtureSuite, SubCase) {}\n',
+            "tests/test_calc.hpp::FixtureSuite_SubCase",
+            "APPROVED",
+            ("REQ-1", "REQ-2"),
+            1,
+            id="cpp_gtest_fixture_links_kw",
+        ),
+        pytest.param(
+            "test_calc.rs",
+            '// @trace("REQ-1")\n#[test]\nfn multiply_works() {\n}\n',
+            "tests/test_calc.rs::multiply_works",
+            "APPROVED",
+            ("REQ-1",),
+            1,
+            id="rust_test_attribute_good",
+        ),
+        pytest.param(
+            "test_calc.rs",
+            '/* @trace("REQ-1") */\n#[tokio::test]\nasync fn test_async_op() {}\n',
+            "tests/test_calc.rs::test_async_op",
+            "APPROVED",
+            ("REQ-1",),
+            1,
+            id="rust_async_block_comment_edge",
+        ),
+    ],
+)
+def test_c_cpp_rust_comment_trace_discovery_good_and_edge_cases(
+    tmp_path: Path,
+    filename: str,
+    source: str,
+    expected_id: str,
+    expected_status: str,
+    expected_links: tuple[str, ...],
+    line: int,
+) -> None:
+    path = tmp_path / filename
+    path.write_text(source, encoding="utf-8")
+    rel_path = f"tests/{filename}"
+    assert load_source_nodes(path, "TestCase", rel_path) == [
+        Node(expected_id, "TestCase", expected_status, expected_links, f"{rel_path}:{line}")
+    ]
+
+
+@trace("REQ-SCHEMA")
+@pytest.mark.parametrize(
+    ("filename", "source", "expected_error"),
+    [
+        pytest.param(
+            "test_bad.c",
+            '/* @trace("REQ-1") */\nvoid helper_fn(void) {}\n',
+            "tests/test_bad.c:1: @trace must precede a test function",
+            id="c_non_test_function_failure",
+        ),
+        pytest.param(
+            "test_bad.rs",
+            '// @trace("REQ-1")\nstruct OnlyStruct;\n',
+            "tests/test_bad.rs:1: @trace must precede a test function",
+            id="rust_missing_function_failure",
+        ),
+        pytest.param(
+            "test_bad.c",
+            '/* @trace("REQ-1") */\n/* @trace("REQ-1") */\nvoid test_dup(void) {}\n',
+            "tests/test_bad.c:1: @trace must precede a test function",
+            id="c_consecutive_trace_without_fn_failure",
+        ),
+        pytest.param(
+            "test_bad.cpp",
+            '// @trace("REQ-1"\nTEST(Suite, Case) {}\n',
+            "tests/test_bad.cpp:1: malformed @trace decorator",
+            id="cpp_unclosed_syntax_failure",
+        ),
+        pytest.param(
+            "test_bad.rs",
+            "// @trace\n#[test]\nfn sample() {}\n",
+            "tests/test_bad.rs:1: malformed @trace decorator: expected @trace(...)",
+            id="rust_bare_trace_without_call_failure",
+        ),
+        pytest.param(
+            "test_bad.c",
+            "/* @trace(123) */\nvoid test_num(void) {}\n",
+            "tests/test_bad.c:1: malformed @trace decorator: link must be a non-empty string",
+            id="c_non_string_link_failure",
+        ),
+        pytest.param(
+            "test_bad.c",
+            '/* @trace("REQ-1") */\nvoid test_same(void);\n'
+            '/* @trace("REQ-1") */\nvoid test_same(void) {}\n',
+            "tests/test_bad.c:3: duplicate @trace decorator on 'test_same'",
+            id="c_duplicate_function_name_failure",
+        ),
+    ],
+)
+def test_c_cpp_rust_comment_trace_discovery_failures(
+    tmp_path: Path, filename: str, source: str, expected_error: str
+) -> None:
+    path = tmp_path / filename
+    path.write_text(source, encoding="utf-8")
+    with pytest.raises(ValueError, match=expected_error):
+        load_source_nodes(path, "TestCase", f"tests/{filename}")
+
+
+@trace("REQ-SCHEMA")
+def test_e2e_cli_multi_language_traceability_check(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "reqs").mkdir()
+    (tmp_path / "reqs" / "REQ-1.toml").write_text('status = "APPROVED"\n', encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_c.c").write_text(
+        '/* @trace("REQ-1") */\nvoid test_c_case(void) {}\n', encoding="utf-8"
+    )
+    cfg = tmp_path / "traceability.toml"
+    cfg.write_text(
+        CONFIG_TOML.replace("tests/**/test_*.py", "tests/test_*.c"),
+        encoding="utf-8",
+    )
+    assert main([str(cfg)]) == 0
+    assert capsys.readouterr().out == ""

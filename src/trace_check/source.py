@@ -1,8 +1,9 @@
-"""Static AST discovery of @trace-decorated test functions in Python source files."""
+"""Static discovery of @trace-annotated test functions in Python, C, C++, and Rust files."""
 
 from __future__ import annotations
 
 import ast
+import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +12,13 @@ from typing import Any
 from trace_check.model import DEFAULT_ACTIVE_STATUS, Node, dedup_links, validate_node_id
 
 TRACE_MODULES = frozenset({"trace_check", "trace_check.checker"})
+COMMENT_EXTS = frozenset({".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".rs"})
+COMMENT_TRACE_RE = re.compile(r"(?://|/\*+)\s*@(trace\b[^\n*]*?)(?:\*/|\s*$)", re.MULTILINE)
+TEST_DECL_RE = re.compile(
+    r"\b(?:TEST(?:_F|_P)?\s*\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)"
+    r"|fn\s+([A-Za-z_]\w*)\s*\("
+    r"|(?:void|int|bool)\s+(test_[A-Za-z0-9_]*)\s*\()"
+)
 
 DecoratedStmt = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
 
@@ -130,15 +138,44 @@ def _check_decorated_stmt(
     return _parse_trace_call(trace_decs[0], default_id, node_type, rel_path)
 
 
-def load_source_nodes(path: Path, node_type: str, rel_path: str) -> list[Node]:
-    """Discover @trace-decorated test functions in a Python file as traceability nodes."""
+def _parse_comment_node(
+    match: re.Match[str], next_start: int, text: str, node_type: str, rel_path: str
+) -> tuple[str, Node]:
+    lineno = text.count("\n", 0, match.start()) + 1
+    scope = f"{rel_path}:{lineno}"
+    decl = TEST_DECL_RE.search(text, match.end(), next_start)
+    if decl is None:
+        raise ValueError(f"{scope}: @trace must precede a test function")
+    name = f"{decl.group(1)}_{decl.group(2)}" if decl.group(1) else decl.group(3) or decl.group(4)
     try:
-        tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=rel_path)
-    except (UnicodeDecodeError, SyntaxError) as error:
-        raise ValueError(f"{rel_path}: {error}") from error
-    names = collect_trace_names(tree)
-    nodes: list[Node] = []
-    errors: list[str] = []
+        call = ast.parse(match.group(1).strip(), mode="eval").body
+    except SyntaxError as error:
+        raise ValueError(f"{scope}: malformed @trace decorator: {error.msg}") from error
+    call.lineno = lineno
+    return name, _parse_trace_call(call, f"{rel_path}::{name}", node_type, rel_path)
+
+
+def _load_comment_nodes(text: str, node_type: str, rel_path: str) -> list[Node]:
+    matches = list(COMMENT_TRACE_RE.finditer(text))
+    nodes, errors, seen = [], [], set()
+    for index, match in enumerate(matches):
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        try:
+            name, node = _parse_comment_node(match, next_start, text, node_type, rel_path)
+            if name in seen:
+                raise ValueError(f"{node.location}: duplicate @trace decorator on '{name}'")
+            seen.add(name)
+            nodes.append(node)
+        except ValueError as error:
+            errors.append(str(error))
+    if errors:
+        raise ValueError("; ".join(errors))
+    return nodes
+
+
+def _load_python_nodes(text: str, node_type: str, rel_path: str) -> list[Node]:
+    tree = ast.parse(text, filename=rel_path)
+    names, nodes, errors = collect_trace_names(tree), [], []
     for stmt, qualname in _iter_decorated(tree, ()):
         try:
             if node := _check_decorated_stmt(stmt, qualname, names, node_type, rel_path):
@@ -148,3 +185,13 @@ def load_source_nodes(path: Path, node_type: str, rel_path: str) -> list[Node]:
     if errors:
         raise ValueError("; ".join(errors))
     return nodes
+
+
+def load_source_nodes(path: Path, node_type: str, rel_path: str) -> list[Node]:
+    """Discover @trace-annotated test functions in a source file as traceability nodes."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+        loader = _load_comment_nodes if path.suffix.lower() in COMMENT_EXTS else _load_python_nodes
+        return loader(text, node_type, rel_path)
+    except (UnicodeDecodeError, SyntaxError) as error:
+        raise ValueError(f"{rel_path}: {error}") from error
