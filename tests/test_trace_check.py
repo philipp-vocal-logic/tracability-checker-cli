@@ -323,7 +323,7 @@ def test_cli_returns_exit_2_on_invalid_config(
 ) -> None:
     cfg_file = tmp_path / "invalid.toml"
     cfg_file.write_text(toml_content, encoding="utf-8")
-    exit_code = main([str(cfg_file)])
+    exit_code = main(["--config", str(cfg_file)])
     captured = capsys.readouterr()
     assert exit_code == 2
     assert captured.out == ""
@@ -463,7 +463,7 @@ def test_cli_returns_exit_2_on_node_discovery_error(
         '[locations]\nRequirement = "reqs/*.toml"\nTestCase = "tests/*.py"\n',
         encoding="utf-8",
     )
-    assert main([str(cfg)]) == 2
+    assert main(["--config", str(cfg)]) == 2
     assert expected_error in capsys.readouterr().err
 
 
@@ -471,7 +471,7 @@ def test_cli_returns_exit_2_on_node_discovery_error(
 def test_cli_returns_exit_2_when_file_missing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert main([str(tmp_path / "missing.toml")]) == 2
+    assert main(["--config", str(tmp_path / "missing.toml")]) == 2
     assert "[ERR_CONFIG]" in capsys.readouterr().err
 
 
@@ -490,7 +490,7 @@ def test_cli_returns_exit_1_and_prints_violations(
         'when_status = "APPROVED"\ntarget_type = "TestCase"\ntarget_status = ["APPROVED"]\n',
         encoding="utf-8",
     )
-    exit_code = main([str(cfg_file)])
+    exit_code = main(["--config", str(cfg_file)])
     captured = capsys.readouterr()
     assert exit_code == 1
     assert captured.out.strip() == (
@@ -504,7 +504,7 @@ def test_cli_json_format_outputs_structured_results(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     repo_root = Path(__file__).resolve().parent.parent
-    assert main(["--format", "json", str(repo_root / "traceability.toml")]) == 0
+    assert main(["--format", "json", "--config", str(repo_root / "traceability.toml")]) == 0
     assert json.loads(capsys.readouterr().out) == {"ok": True, "violations": []}
 
     (tmp_path / "reqs").mkdir()
@@ -518,7 +518,7 @@ def test_cli_json_format_outputs_structured_results(
         'when_status = "APPROVED"\ntarget_type = "TestCase"\ntarget_status = ["APPROVED"]\n',
         encoding="utf-8",
     )
-    assert main(["--format", "json", str(cfg_file)]) == 1
+    assert main(["--format", "json", "--config", str(cfg_file)]) == 1
     assert json.loads(capsys.readouterr().out) == {
         "ok": False,
         "violations": [
@@ -532,7 +532,7 @@ def test_cli_json_format_outputs_structured_results(
         ],
     }
 
-    assert main(["--format", "json", str(tmp_path / "missing.toml")]) == 2
+    assert main(["--format", "json", "--config", str(tmp_path / "missing.toml")]) == 2
     error_payload = json.loads(capsys.readouterr().err)
     assert error_payload["ok"] is False
     assert error_payload["error"]["code"] == "ERR_CONFIG"
@@ -543,7 +543,7 @@ def test_cli_returns_exit_0_with_zero_noise_on_project_traceability_toml(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     repo_root = Path(__file__).resolve().parent.parent
-    exit_code = main([str(repo_root / "traceability.toml")])
+    exit_code = main(["--config", str(repo_root / "traceability.toml")])
     captured = capsys.readouterr()
     assert exit_code == 0
     assert captured.out == ""

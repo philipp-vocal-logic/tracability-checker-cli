@@ -5,7 +5,7 @@ Zero-noise CLI project traceability checker using only the Python standard libra
 ## Usage
 
 ```bash
-trace-check [--format {text,json}] [traceability.toml]
+trace-check [--config traceability.toml] [--format {text,json}]
 ```
 
 ### Exit Codes

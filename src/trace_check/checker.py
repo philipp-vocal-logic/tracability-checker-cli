@@ -209,6 +209,15 @@ def _discover_nodes(base_dir: Path, locations: dict[str, str]) -> dict[str, Node
     return discovered
 
 
+def _resolve_base_dir(path: Path) -> Path:
+    parent = path.parent.resolve()
+    return (
+        parent.parent
+        if parent.name == ".policy"  # glossary: ignore[policy]
+        else path.parent
+    )
+
+
 def load_config(path: Path) -> Config:
     """Load and self-validate a TOML traceability configuration and its nodes."""
     with path.open("rb") as f:
@@ -224,7 +233,7 @@ def load_config(path: Path) -> Config:
     edges = allowed_edges(chain)
     depr = _parse_deprecated_status(schema, statuses)
     rules = _parse_rules(raw_config.get("rules", ()), statuses, edges, depr)
-    return Config(chain, statuses, rules, _discover_nodes(path.parent, locations), depr)
+    return Config(chain, statuses, rules, _discover_nodes(_resolve_base_dir(path), locations), depr)
 
 
 def build_adjacency(nodes: dict[str, Node], edges: set[frozenset[str]]) -> dict[str, set[str]]:

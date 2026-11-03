@@ -18,10 +18,10 @@ def build_parser() -> argparse.ArgumentParser:
         description="Validate project traceability against a TOML schema and rules.",
     )
     parser.add_argument(
-        "config",
-        nargs="?",
-        default="traceability.toml",
-        help="Path to traceability TOML file (default: traceability.toml)",
+        "--config",
+        type=Path,
+        default=Path("traceability.toml"),
+        help="Path to traceability TOML file (default: traceability.toml).",
     )
     parser.add_argument(
         "--format",
@@ -63,7 +63,7 @@ def _emit_violations(violations: list[Violation], output_format: str) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run trace-check and return POSIX exit code (0=ok, 1=violations, 2=config error)."""
     args = build_parser().parse_args(argv)
-    path = Path(args.config)
+    path = args.config
 
     try:
         config = load_config(path)

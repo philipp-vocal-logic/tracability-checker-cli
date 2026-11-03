@@ -134,7 +134,7 @@ def test_foreign_trace_decorators_are_ignored(tmp_path: Path, source: str) -> No
 def test_utf8_bom_source_file_is_parsed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     source = "from trace_check import trace\n@trace('REQ-1')\ndef test_a(): ...\n"
     cfg = make_project(tmp_path, {"tests/test_bom.py": b"\xef\xbb\xbf" + source.encode()})
-    assert main(["--format", "json", str(cfg)]) == 0
+    assert main(["--format", "json", "--config", str(cfg)]) == 0
     assert json.loads(capsys.readouterr().out) == {"ok": True, "violations": []}
 
 
@@ -144,7 +144,7 @@ def test_duplicate_node_id_reports_first_location(
 ) -> None:
     source = "from trace_check import trace\n@trace('REQ-1', id='TC-1')\ndef test_a(): ...\n"
     cfg = make_project(tmp_path, {"tests/test_a.py": source, "tests/test_b.py": source})
-    assert main([str(cfg)]) == 2
+    assert main(["--config", str(cfg)]) == 2
     assert (
         "tests/test_b.py: duplicate node id 'TC-1' (first defined at tests/test_a.py:2)"
         in capsys.readouterr().err
@@ -297,10 +297,11 @@ def test_e2e_cli_multi_language_traceability_check(
     (tmp_path / "tests" / "test_c.c").write_text(
         '/* @trace("REQ-1") */\nvoid test_c_case(void) {}\n', encoding="utf-8"
     )
-    cfg = tmp_path / "traceability.toml"
+    cfg = tmp_path / ".policy" / "traceability.toml"  # glossary: ignore[policy]
+    cfg.parent.mkdir()
     cfg.write_text(
         CONFIG_TOML.replace("tests/**/test_*.py", "tests/test_*.c"),
         encoding="utf-8",
     )
-    assert main([str(cfg)]) == 0
+    assert main(["--config", str(cfg)]) == 0
     assert capsys.readouterr().out == ""
